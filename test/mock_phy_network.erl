@@ -180,7 +180,6 @@ handle_info({frame, Frame}, #{network := NetworkNode, waiting := {From, Ref}, re
                        From ! {Ref, affrej},
                        State
                end,
-    %io:format("newState: ~w~n", [NewState]),
     {noreply, maps:remove(waiting, NewState)};
 
 handle_info({frame, Frame}, #{waiting := {From, Ref}, regs := #{sys_cfg := #{ffen := 0}}} = State) ->
@@ -201,12 +200,9 @@ tx(NetworkNode, Frame) ->
     ok.
 
 check_address(Frame, ShortAddress, ExtAddress) -> % This will need to check the PAN and accept broadcast address at some point
-    io:format("RawFrame ~p~n",[Frame]),
     {_, MacHeader, _} = mac_frame:decode(Frame),
-    %io:format("add NOT ok ~p~n",[MacHeader]),
 
-    %io:format("Exp ShortAddress: ~p~nRcv Sh ~p~n",[ShortAddress, MacHeader#mac_header.dest_addr]), 
-    io:format("Exp ExtAddress: ~p~nRcv ExtAddress: ~p~n",[ExtAddress, MacHeader#mac_header.dest_addr]), 
+    %io:format("Exp ExtAddress: ~p~nRcv ExtAddress: ~p~n",[ExtAddress, MacHeader#mac_header.dest_addr]), 
 
     case MacHeader#mac_header.dest_addr of
         ShortAddress -> ok;

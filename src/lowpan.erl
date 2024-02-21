@@ -7,7 +7,7 @@
 -export([loop/0, pkt_encapsulation/2,create_hc1_dtgm/2,fragment_ipv6_packet/1,reassemble_datagram/2,reassemble_datagrams/1,
         build_hc1_header/1,get_ipv6_pkt/2,datagram_info/1,compress_ipv6_header/1, build_datagram_pckt/2,
         convert_hc1_tuple_to_bin/1, get_ipv6_pckt_info/1, get_ipv6_payload/1, get_ipv6_header/1,
-        map_to_binary/1, binary_to_lis/1, decompress_ipv6_header/2, get_default_LL_add/1]).
+        map_to_binary/1, binary_to_lis/1, decompress_ipv6_header/2, get_default_LL_add/1, get_mac_add/1, convert/1]).
 
 
 
@@ -64,8 +64,14 @@ create_hc1_dtgm(IphcHeader, Payload)->
 get_ipv6_pckt_info(Ipv6Pckt) ->
     <<Version:4, TrafficClass:8, FlowLabel:20, PayloadLength:16, NextHeader:8, HopLimit:8,
       SourceAddress:128, DestAddress:128, Payload/binary>> = Ipv6Pckt,
-
     {Version, TrafficClass, FlowLabel, PayloadLength, NextHeader, HopLimit, SourceAddress, DestAddress, Payload}.
+
+get_mac_add(Int) ->
+   encode_integer(Int).
+
+
+
+
 get_ipv6_header(Ipv6Pckt) ->
     <<Version:4, TrafficClass:8, FlowLabel:20, PayloadLength:16, NextHeader:8, HopLimit:8,
       SourceAddress:128, DestAddress:128, _>> = Ipv6Pckt,
@@ -102,7 +108,8 @@ compress_ipv6_header(Ipv6Pckt)->
 
 
     io:format("CarrInlineMap: ~p~n", [CarrInlineMap]),
-    CarrInlineBin = encode_list_to_bin(CarrInlineList),
+    %io:format("CarrInlineList: ~p~n", [CarrInlineList]),
+    CarrInlineBin = list_to_binary(CarrInlineList),%encode_list_to_bin(CarrInlineList),
 
     io:format("CarrInlineBin ~p~n", [CarrInlineBin]),
 
@@ -165,18 +172,22 @@ process_tf(TrafficClass, FlowLabel, CarrInlineMap, CarrInlineList) ->
 
         {_, _, 0} -> 
             UpdatedMap = CarrInlineMap#{"TrafficClass"=>TrafficClass},
-            UpdatedList = CarrInlineList ++[TrafficClass],
+            Bin = <<TrafficClass:8>>,
+            L = [Bin],
+            UpdatedList = CarrInlineList ++ L,
             {2#10, UpdatedMap, UpdatedList};% Flow Label is elided
             
         {_, 0, _} -> 
             UpdatedMap = CarrInlineMap#{"ECN"=>ECN,"FlowLabel"=>FlowLabel},
-            L = [ECN, FlowLabel],
-            UpdatedList = CarrInlineList ++L,
+            Bin = <<ECN:8, FlowLabel:24>>,
+            L = [Bin],
+            UpdatedList = CarrInlineList ++ L,
             {2#01, UpdatedMap, UpdatedList}; % DSCP is elided
         _ -> 
             UpdatedMap = CarrInlineMap#{"TrafficClass"=>TrafficClass,"FlowLabel"=>FlowLabel},
-            L = [TrafficClass, FlowLabel],
-            UpdatedList = CarrInlineList ++L,
+            Bin = <<TrafficClass:8, FlowLabel:24>>,
+            L = [Bin],
+            UpdatedList = CarrInlineList ++ L,
             {2#00, UpdatedMap,UpdatedList}  % ECN, DSCP, and Flow Label are present
 
     end.
@@ -188,13 +199,19 @@ process_tf(TrafficClass, FlowLabel, CarrInlineMap, CarrInlineList) ->
 % @end
 %-------------------------------------------------------------------------------
 process_nh(NextHeader, CarrInlineMap,CarrInlineList) when NextHeader == 17 -> 
-    UpdatedList = CarrInlineList ++ [17],
+    Bin = <<NextHeader>>,
+    L = [Bin],
+    UpdatedList = CarrInlineList ++ L,
     {0, CarrInlineMap#{"NextHeader"=>17}, UpdatedList}; % UDP %TODO check compression for UDP
 process_nh(NextHeader, CarrInlineMap, CarrInlineList) when NextHeader == 6 -> 
-    UpdatedList = CarrInlineList ++ [6],
+    Bin = <<NextHeader>>,
+    L = [Bin],
+    UpdatedList = CarrInlineList ++ L,
     {0, CarrInlineMap#{"NextHeader"=>6},UpdatedList}; % TCP
 process_nh(NextHeader, CarrInlineMap, CarrInlineList) when NextHeader == 58 -> 
-    UpdatedList = CarrInlineList ++ [58],
+    Bin = <<NextHeader>>,
+    L = [Bin],
+    UpdatedList = CarrInlineList ++ L,
     {0, CarrInlineMap#{"NextHeader"=>58},UpdatedList}; % ICMPv6
 process_nh(_, CarrInlineMap, CarrInlineList)  -> {1,CarrInlineMap,CarrInlineList}. % compressed usig LOWPAN_NHC
 
@@ -217,7 +234,9 @@ process_hlim(HopLimit, CarrInlineMap, CarrInlineList) when HopLimit == 255 ->
     {2#11, CarrInlineMap, CarrInlineList};
 
 process_hlim(HopLimit, CarrInlineMap, CarrInlineList)-> 
-    UpdatedList = CarrInlineList++[HopLimit],
+    Bin = <<HopLimit:8>>,
+    L = [Bin],
+    UpdatedList = CarrInlineList++L,
     {2#00, CarrInlineMap#{"HopLimit"=> HopLimit}, UpdatedList}.
 
 %-------------------------------------------------------------------------------
@@ -291,17 +310,23 @@ process_sam(SAC, SrcAdd, CarrInlineMap, CarrInlineList) when SAC == 0 ->
             {2#11, CarrInlineMap, CarrInlineList}; % MAC address is split into two 24-bit parts, FFFE is inserted in the middle
 
         <<?LINK_LOCAL_PREFIX:16, _:48, 16#000000FFFE00:48, _:16>> -> 
-            UpdatedList = CarrInlineList++[Last16Bits],
+            Bin = <<Last16Bits:16>>,
+            L = [Bin],
+            UpdatedList = CarrInlineList ++ L,
             UpdatedMap = CarrInlineMap#{"SAM"=>Last16Bits},
             %io:format("Last16Bits ~p~n",[Last16Bits]),
             {2#10, UpdatedMap, UpdatedList}; % the first 112 bits are elided, last 16 IID bits are carried in-line
 
         <<?LINK_LOCAL_PREFIX:16, _:48, _:64>> -> 
-            UpdatedList = CarrInlineList++[Last64Bits],
+            Bin = <<Last64Bits:64>>,
+            L = [Bin],
+            UpdatedList = CarrInlineList ++ L,
             UpdatedMap = CarrInlineMap#{"SAM"=>Last64Bits},
             {2#01, UpdatedMap, UpdatedList}; % the first 64 bits are elided, last 64 bits (IID) are carried in-line
         _ -> 
-            UpdatedList = CarrInlineList++[SrcAdd],
+            Bin = <<SrcAdd:128>>,
+            L = [Bin],
+            UpdatedList = CarrInlineList ++ L,
             {2#00, CarrInlineMap#{"SAM"=>SrcAdd}, UpdatedList} % full address is carried in-line
     end;
 
@@ -315,17 +340,23 @@ process_sam(SAC, SrcAdd, CarrInlineMap, CarrInlineList) when SAC == 1 ->
             {2#11,CarrInlineMap, CarrInlineList}; % the address is fully elided
 
         <<?GLOBAL_PREFIX:16, _:48, 16#000000FFFE00:48, _:16>> -> 
-            UpdatedList = CarrInlineList++[Last16Bits],
+            Bin = <<Last16Bits:16>>,
+            L = [Bin],
+            UpdatedList = CarrInlineList ++ L,
             UpdatedMap = CarrInlineMap#{"SAM"=>Last16Bits},
             %io:format("Last16Bits ~p~n",[Last16Bits]),
             {2#10, UpdatedMap, UpdatedList}; % the first 112 bits are elided, last 16 IID bits are carried in-line
 
         <<?GLOBAL_PREFIX:16, _:48, _:64>> -> 
-            UpdatedList = CarrInlineList++[Last64Bits],
+            Bin = <<Last64Bits:64>>,
+            L = [Bin],
+            UpdatedList = CarrInlineList ++ L,
             UpdatedMap = CarrInlineMap#{"SAM"=>Last64Bits},
             {2#01, UpdatedMap, UpdatedList}; % the first 64 bits are elided, last 64 bits (IID) are carried in-line
         _ -> 
-            UpdatedList = CarrInlineList++[SrcAdd],
+            Bin = <<SrcAdd:128>>,
+            L = [Bin],
+            UpdatedList = CarrInlineList ++ L,
             {2#00, CarrInlineMap#{"SAM"=>SrcAdd}, UpdatedList} % full address is carried in-line
     end.
 
@@ -394,15 +425,21 @@ process_dam(0, 0 , DstAdd, CarrInlineMap, CarrInlineList) ->
         <<?LINK_LOCAL_PREFIX:16, 0:48,_:24, 16#FFFE:16,_:24>> -> 
             {2#11, CarrInlineMap, CarrInlineList}; % MAC address is split into two 24-bit parts, FFFE is inserted in the middle
         <<?LINK_LOCAL_PREFIX:16, 0:48, 16#000000FFFE00:48, _:16>> -> 
-            UpdatedList = CarrInlineList++[Last16Bits],
+            Bin = <<Last16Bits:16>>,
+            L = [Bin],
+            UpdatedList = CarrInlineList ++ L,
             UpdatedMap = CarrInlineMap#{"DAM"=>Last16Bits},
             {2#10, UpdatedMap, UpdatedList}; % the first 112 bits are elided, last 16 bits are in-line
         <<?LINK_LOCAL_PREFIX:16, _:112>> -> 
-            UpdatedList = CarrInlineList++[Last64Bits],
+            Bin = <<Last64Bits:64>>,
+            L = [Bin],
+            UpdatedList = CarrInlineList ++ L,
             UpdatedMap = CarrInlineMap#{"DAM"=>Last64Bits},
             {2#01, UpdatedMap, UpdatedList}; % the first 64 bits are elided, last 64 bits are in-line
         _ -> 
-            UpdatedList = CarrInlineList++[DstAdd],
+            Bin = <<DstAdd:128>>,
+            L = [Bin],
+            UpdatedList = CarrInlineList ++ L,
             {2#00, CarrInlineMap#{"DAM"=>DstAdd}, UpdatedList} % full address is carried in-line
     end;
 
@@ -417,11 +454,15 @@ process_dam(0, 1, DstAdd, CarrInlineMap, CarrInlineList) ->
         <<?GLOBAL_PREFIX:16, _:48,_:24, 16#FFFE:16,_:24>> -> 
             {2#11, CarrInlineMap, CarrInlineList}; % MAC address is split into two 24-bit parts, FFFE is inserted in the middle
         <<?GLOBAL_PREFIX:16, _:48, 16#000000FFFE00:48, _:16>> -> 
-            UpdatedList = CarrInlineList++[Last16Bits],
+            Bin = <<Last16Bits:16>>,
+            L = [Bin],
+            UpdatedList = CarrInlineList ++ L,
             UpdatedMap = CarrInlineMap#{"DAM"=>Last16Bits},
             {2#10, UpdatedMap, UpdatedList}; % the first 112 bits are elided, last 16 bits are in-line
         <<?GLOBAL_PREFIX:16, _:112>> -> 
-            UpdatedList = CarrInlineList++[Last64Bits],
+            Bin = <<Last64Bits:64>>,
+            L = [Bin],
+            UpdatedList = CarrInlineList ++ L,
             UpdatedMap = CarrInlineMap#{"DAM"=>Last64Bits},
             {2#01, UpdatedMap, UpdatedList}; % the first 64 bits are elided, last 64 bits are in-line
         _ -> 
@@ -437,20 +478,28 @@ process_dam(1, 0, DstAdd, CarrInlineMap, CarrInlineList)->
 
     case DestAddBits of
         <<16#FF02:16, 0:104, _:8>> -> % ff02::00XX.
-            UpdatedList = CarrInlineList++[Last8Bits],
+            Bin = <<Last8Bits:8>>,
+            L = [Bin],
+            UpdatedList = CarrInlineList ++ L,
             UpdatedMap = CarrInlineMap#{"DAM"=>Last8Bits},
             {2#11, UpdatedMap, UpdatedList};
         <<16#FF:8, _:8, 0:80, _:32>> -> %ffXX::00XX:XXXX.
-            UpdatedList = CarrInlineList++[Last32Bits],
+            Bin = <<Last32Bits:32>>,
+            L = [Bin],
+            UpdatedList = CarrInlineList ++ L,
             UpdatedMap = CarrInlineMap#{"DAM"=>Last32Bits},
             {2#10, UpdatedMap, UpdatedList};
         <<16#FF:8, _:8, 0:64, _:48>> -> % ffXX::00XX:XXXX:XXXX.
-            UpdatedList = CarrInlineList++[Last48Bits],
+            Bin = <<Last48Bits:48>>,
+            L = [Bin],
+            UpdatedList = CarrInlineList ++ L,
             UpdatedMap = CarrInlineMap#{"DAM"=>Last48Bits},
             {2#01, UpdatedMap, UpdatedList}; 
         
         _ -> 
-            UpdatedList = CarrInlineList++[DstAdd],
+            Bin = <<DstAdd:128>>,
+            L = [Bin],
+            UpdatedList = CarrInlineList ++ L,
             {2#00, CarrInlineMap#{"DAM"=>DstAdd}, UpdatedList} % full address is carried in-line
     end; 
 
@@ -459,7 +508,9 @@ process_dam(1, 1, DstAdd, CarrInlineMap, CarrInlineList)->
     <<_:80, Last48Bits:48>> = DestAddBits,
     case DestAddBits of
         <<16#FF, _:112>> ->
-            UpdatedList = CarrInlineList++[Last48Bits],
+            Bin = <<Last48Bits:48>>,
+            L = [Bin],
+            UpdatedList = CarrInlineList ++ L,
             UpdatedMap = CarrInlineMap#{"DAM"=>Last48Bits},
             {2#00, UpdatedMap, UpdatedList}
     end.
@@ -476,7 +527,7 @@ decompress_ipv6_header(CompressedPacket, EUI64) ->
     <<TF:8, NH:8, HLIM:8, CID:8, SAC:8, SAM:8, M:8, DAC:8, DAM:8, Rest/binary>> = CompressedPacket,
     % Rest contain carriedInline values + payload 
     CompressedHeader = {TF, NH, HLIM, CID, SAC, SAM, M, DAC, DAM},
-    io:format("CompressedHeader: ~p~n", [CompressedHeader]),
+    %io:format("CompressedHeader: ~p~n", [CompressedHeader]),
     %MacIID = get_iid_from_mac(EUI64),
     % RestN represents the CarriedInline with field of interest 
     {TrafficClass, FlowLabel, Rest1} = decode_tf(TF, Rest), 
@@ -484,18 +535,35 @@ decompress_ipv6_header(CompressedPacket, EUI64) ->
     {HopLimit,Rest3} = decode_hlim(HLIM, Rest2),
     {SourceAddress,Rest4} = decode_sam(SAC, SAM, Rest3,EUI64),
     {DestAddress,Payload} = decode_dam(M, DAC, DAM, Rest4,EUI64),
-    DecompressedFields = {TrafficClass, FlowLabel, NextHeader, HopLimit,SourceAddress,DestAddress, Payload}, 
-    PayloadLength = bit_size(Payload),  
-    DecompressedPckt = <<6:4,TrafficClass,FlowLabel/binary,PayloadLength:16, NextHeader, HopLimit,SourceAddress/binary,DestAddress/binary, Payload/binary>>,
+    PayloadLength = bit_size(Payload),
+    DecompressedFields = {TrafficClass, FlowLabel, PayloadLength, NextHeader, HopLimit,SourceAddress,DestAddress, Payload}, 
+    
     io:format("DecompressedFields ~p~n", [DecompressedFields]),
-    {TrafficClass, FlowLabel, NextHeader, HopLimit, SourceAddress, DestAddress, Rest}.
+    DecompressedPckt = convert(DecompressedFields),
+    DecompressedPckt.
+    %{TrafficClass, FlowLabel, NextHeader, HopLimit, SourceAddress, DestAddress, Payload}.
 
+convert(Tuple) ->
+    Elements = tuple_to_list(Tuple),
+    Binaries = [element_to_binary(Elem) || Elem <- Elements],
+    list_to_binary(Binaries).
+
+element_to_binary(Elem) when is_integer(Elem) ->
+   encode_integer(Elem);
+element_to_binary(Elem) when is_binary(Elem) ->
+    Elem;
+element_to_binary(Elem) when is_tuple(Elem) ->
+    convert(Elem);
+element_to_binary(Elem) when is_list(Elem) ->
+    list_to_binary(Elem).
 
 decode_tf(TF, CarriedInline) ->
     % retrieve values of interest from Rest 
-    <<TrafficClass:8, FL1:8, FL2:8,FL3:8, FL4:8, Rest/binary>> = CarriedInline,
+    % TODO, check max value on 20bits for FL, and infer bit split
+    % TODO - compute binary size of 
+    <<TrafficClass:8, FL1:8, FL2:8,FL3:8, Rest/binary>> = CarriedInline,
 
-    FlowLabel = <<FL1,FL2,FL3, FL4>>,
+    FlowLabel = <<FL1,FL2,FL3>>,
 
      case TF of
         2#11 -> % everything elided

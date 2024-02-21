@@ -11,7 +11,7 @@
 
 all() -> [{group, simple_tx_rx}].
 
-groups() -> [{simple_tx_rx, [parallel], [sender, receiver]}
+groups() -> [{simple_tx_rx, [parallel], [sender, receiver, receiver2]}
             ].
 
 
@@ -23,11 +23,6 @@ init_per_group(_, Config) ->
     Node1MacAddress = <<16#CAFEDECA00000001:64>>, 
     Node2MacAddress = <<16#CAFEDECA00000002:64>>,
     Node3MacAddress = <<16#CAFEDECA00000003:64>>,
-
-    %Node1Address = <<16#FE80:16,0:48, Node1MacAddress/binary>>,
-    %Node2Address = <<16#FF02:16,0:48, Node2MacAddress/binary>>, 
-    %Node3Address = <<16#FF02:16,0:48, Node3MacAddress/binary>>, 
-    %io:format("SrcAdd: ~p~nDstAdd: ~p~n",[Node1Address,Node2Address]),
 
     % use default address (LL) for both the sender and the receiver 
     Node1Address = lowpan:get_default_LL_add(Node1MacAddress),
@@ -48,8 +43,8 @@ init_per_group(_, Config) ->
     PayloadLength = byte_size(Payload),
     
 
-    Ipv6Pckt = <<6:4, 224:8, 1048575:20, PayloadLength:16, 58:8, 255:8, Node1Address/binary, Node2Address/binary, Payload/binary>>,
-    Ipv6Pckt2 = <<6:4, 224:8, 2:20, PayloadLength:16, 58:8, 255:8, Node1Address/binary, Node3Address/binary, Payload/binary>>,
+    Ipv6Pckt = <<6:4, 224:8, 2:20, PayloadLength:16, 58:8, 255:8, Node1Address/binary, Node2Address/binary, Payload/binary>>,
+    Ipv6Pckt2 = <<6:4, 224:8, 1048575:20, PayloadLength:16, 58:8, 255:8, Node1Address/binary, Node3Address/binary, Payload/binary>>,
 
     [{net_pid, NetPid}, {network, Network}, {ipv6_packet, Ipv6Pckt}, {ipv6_packet2, Ipv6Pckt2},{node1_address, Node1Address}, {node2_address, Node2Address}, {node3_address, Node3Address},
      {node1_mac_src_address, Node1MacAddress}, {node2_mac_src_address, Node2MacAddress}, {node3_mac_src_address, Node3MacAddress} | Config].
@@ -112,11 +107,11 @@ sender(Config) ->
     ct:pal("Launching node1..."),
     {Pid1, Node1} = ?config(node1, Config),
     IPv6Packet = ?config(ipv6_packet, Config),
-
+    IPv6Packet2 = ?config(ipv6_packet2, Config),
     
     ok = erpc:call(Node1, lowpan_stack, snd_pckt, [IPv6Packet]), 
-
-    %ok = erpc:call(Node1, lowpan_stack, snd_pckt, [IPv6Packet2]), 
+    ct:sleep(100),
+    ok = erpc:call(Node1, lowpan_stack, snd_pckt, [IPv6Packet2]), 
     
     ct:pal("Node1 done"),
     lowpan_node:stop_lowpan_node(Node1, Pid1).
@@ -127,13 +122,22 @@ receiver(Config) ->
     ct:pal("Launching node2..."),
     {Pid2, Node2} = ?config(node2, Config),
     ExpectedIpv6 = ?config(ipv6_packet, Config),
+    Node2MacAddress = ?config(node2_mac_src_address, Config),
     {CompressedHeader, _} = lowpan:compress_ipv6_header(ExpectedIpv6),
     {_, _, _, _, _,_, _, _, Payload} = lowpan:get_ipv6_pckt_info(ExpectedIpv6),
     CompressedIpv6Packet = <<CompressedHeader/binary, Payload/binary>>,
 
     ReceivedData = erpc:call(Node2, lowpan_stack, rcv_frame, []),
-    io:format("Original: ~p~n~nReceived: ~p~n", [ExpectedIpv6,ReceivedData]),
+    io:format("Original comp: ~p~n~nReceived comp: ~p~n", [CompressedIpv6Packet,ReceivedData]),
     ReceivedData = CompressedIpv6Packet,
+
+    DecompressedFields = lowpan:decompress_ipv6_header(ReceivedData, Node2MacAddress),
+    
+    %DecompressedPckt = lowpan:convert(DecompressedFields),
+    %io:format("Original: ~p~n~nReceived: ~p~n", [ExpectedIpv6,DecompressedPckt]),
+
+    %ExpectedIpv6 = DecompressedPckt,
+    
     ct:pal("Node2 done"), 
   
     lowpan_node:stop_lowpan_node(Node2, Pid2).

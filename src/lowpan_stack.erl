@@ -95,19 +95,21 @@ idle_state({call, From}, {frame_rx}, Data) ->
 % --- Internal state -----------
 % Handling packet transmission state
 pckt_tx_state(_EventType, {pckt_tx, IdleState, Ipv6Pckt, From}, Data = #{src_mac_addr := SrcMacAddress, dest_mac_addr := DstMacAddress}) ->
-    io:format("IdleState ~p~n", [IdleState]),
+    %io:format("DstMacAddress ~p~n", [DstMacAddress]),
     {CompressedHeader, _} = lowpan:compress_ipv6_header(Ipv6Pckt),
-    {_, _, _, _, _,_, _, _, Payload} = lowpan:get_ipv6_pckt_info(Ipv6Pckt),
+    {_, _, _, _, _,_, _, DestAddress, Payload} = lowpan:get_ipv6_pckt_info(Ipv6Pckt),
+    DestMacAddress = lowpan:get_mac_add(DestAddress),
+    io:format("DestMacAddress: ~p~n",[DestMacAddress]),
    
     CompressedPacket = <<CompressedHeader/binary, Payload/binary>>,
     Fragments = lowpan:fragment_ipv6_packet(CompressedPacket),
 
-    %io:format("Compressed Header: ~p~n",[CompressedHeader]),
+    
 
     Response = lists:foreach(fun({Header, Datas})->
         io:format("Fragment: ~p~n",[<<Header/binary,Datas/binary>>]),
                         ieee802154:transmission({#frame_control{src_addr_mode = ?EXTENDED, dest_addr_mode = ?EXTENDED}, 
-                                                #mac_header{src_addr = SrcMacAddress, dest_addr = DstMacAddress},
+                                                #mac_header{src_addr = SrcMacAddress, dest_addr = DestMacAddress},
                                                 <<Header/binary,Datas/binary>>})
                         end, Fragments),
     {next_state, IdleState, Data#{fragments => Fragments}, [{reply, From, Response}]}.
@@ -148,8 +150,7 @@ get_new_frame(From, State, PrevNbRxFrames, StartTime) ->
                 _-> io:format("Reassembly done~n"),
 
                     EUI = erpc:call(node(), ieee802154, get_mac_extended_address, []),
-                    io:format("EUI Add: ~p~n", [EUI]),
-                    lowpan:decompress_ipv6_header(Reassembled, EUI),
+                    %lowpan:decompress_ipv6_header(Reassembled, EUI),
                     {next_state, idle_state, State, [{reply, From, Reassembled}]}
             end
     end.
