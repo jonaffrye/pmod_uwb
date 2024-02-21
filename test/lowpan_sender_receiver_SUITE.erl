@@ -133,7 +133,7 @@ receiver(Config) ->
 
     DecompressedFields = lowpan:decompress_ipv6_header(ReceivedData, Node2MacAddress),
     
-    %DecompressedPckt = lowpan:convert(DecompressedFields),
+    %DecompressedPckt = lowpan:tuple_to_bin(DecompressedFields),
     %io:format("Original: ~p~n~nReceived: ~p~n", [ExpectedIpv6,DecompressedPckt]),
 
     %ExpectedIpv6 = DecompressedPckt,

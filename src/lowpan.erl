@@ -7,7 +7,7 @@
 -export([loop/0, pkt_encapsulation/2,create_hc1_dtgm/2,fragment_ipv6_packet/1,reassemble_datagram/2,reassemble_datagrams/1,
         build_hc1_header/1,get_ipv6_pkt/2,datagram_info/1,compress_ipv6_header/1, build_datagram_pckt/2,
         convert_hc1_tuple_to_bin/1, get_ipv6_pckt_info/1, get_ipv6_payload/1, get_ipv6_header/1,
-        map_to_binary/1, binary_to_lis/1, decompress_ipv6_header/2, get_default_LL_add/1, get_mac_add/1, convert/1]).
+        map_to_binary/1, binary_to_lis/1, decompress_ipv6_header/2, get_default_LL_add/1, get_mac_add/1, tuple_to_bin/1]).
 
 
 
@@ -539,11 +539,11 @@ decompress_ipv6_header(CompressedPacket, EUI64) ->
     DecompressedFields = {TrafficClass, FlowLabel, PayloadLength, NextHeader, HopLimit,SourceAddress,DestAddress, Payload}, 
     
     io:format("DecompressedFields ~p~n", [DecompressedFields]),
-    DecompressedPckt = convert(DecompressedFields),
+    DecompressedPckt = tuple_to_bin(DecompressedFields),
     DecompressedPckt.
     %{TrafficClass, FlowLabel, NextHeader, HopLimit, SourceAddress, DestAddress, Payload}.
 
-convert(Tuple) ->
+tuple_to_bin(Tuple) ->
     Elements = tuple_to_list(Tuple),
     Binaries = [element_to_binary(Elem) || Elem <- Elements],
     list_to_binary(Binaries).
@@ -553,7 +553,7 @@ element_to_binary(Elem) when is_integer(Elem) ->
 element_to_binary(Elem) when is_binary(Elem) ->
     Elem;
 element_to_binary(Elem) when is_tuple(Elem) ->
-    convert(Elem);
+    tuple_to_bin(Elem);
 element_to_binary(Elem) when is_list(Elem) ->
     list_to_binary(Elem).
 
