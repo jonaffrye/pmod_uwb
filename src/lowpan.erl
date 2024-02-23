@@ -4,7 +4,7 @@
 %-include("mac_layer.hrl").
 %-include("ieee802154.hrl").
 
--export([loop/0, pkt_encapsulation/2,create_hc1_dtgm/2,fragment_ipv6_packet/1,reassemble_datagram/2,reassemble_datagrams/1,
+-export([pkt_encapsulation/2,create_hc1_dtgm/2,fragment_ipv6_packet/1,reassemble_datagram/2,reassemble_datagrams/1,
         build_hc1_header/1,get_ipv6_pkt/2,datagram_info/1,compress_ipv6_header/1, build_datagram_pckt/2,
         convert_hc1_tuple_to_bin/1, get_ipv6_pckt_info/1, get_ipv6_payload/1, get_ipv6_header/1,
         map_to_binary/1, binary_to_lis/1, decompress_ipv6_header/2, get_default_LL_add/1, get_mac_add/1, tuple_to_bin/1]).
@@ -28,7 +28,7 @@ get_ipv6_pkt(Header, Payload)->
 %-------------------------------------------------------------------------------
 pkt_encapsulation(Header, Payload)->
     Ipv6Pckt = get_ipv6_pkt(Header, Payload), 
-    DhTypeBinary = <<?IPV6_DHTYPE:8/unit:1, 0:16/unit:1>>, 
+    DhTypeBinary = <<?IPV6_DHTYPE:8, 0:16>>, 
     <<DhTypeBinary/binary, Ipv6Pckt/binary>>.
 
 %------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -68,9 +68,6 @@ get_ipv6_pckt_info(Ipv6Pckt) ->
 
 get_mac_add(Int) ->
    encode_integer(Int).
-
-
-
 
 get_ipv6_header(Ipv6Pckt) ->
     <<Version:4, TrafficClass:8, FlowLabel:20, PayloadLength:16, NextHeader:8, HopLimit:8,
@@ -157,6 +154,15 @@ binary_to_lis(BinaryValues) ->
     Values = erlang:binary_to_list(BinaryValues), % binary to integer list conversion
     %io:format("Recovered values: ~p~n", [Values]),
     Values.
+
+
+convert_hc1_tuple_to_bin(IphcHeaderTuple)->
+    {Tf, Nh, Hlim, Cid, Sac, Sam, M, Dac, Dam} = IphcHeaderTuple,
+
+    % we add 3 padding bits to make it a multiple of 8
+    Binary = <<Tf:2, Nh:1, Hlim:2, Cid:1, Sac:1, Sam:2, M:1, Dac:1, Dam:2, 0:3>>,
+    Binary.
+
 
 %-------------------------------------------------------------------------------
 % @private
@@ -515,6 +521,65 @@ process_dam(1, 1, DstAdd, CarrInlineMap, CarrInlineList)->
             {2#00, UpdatedMap, UpdatedList}
     end.
 
+
+
+
+%------------------------------------------------------------------------------------------------------------------------------------------------------
+%
+%                                                       Packet fragmentation
+%
+%------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+% Fragmentation Header
+build_frag_header(#frag_header{frag_type = FragType, datagram_size = DatagramSize, datagram_tag = DatagramTag, datagram_offset = DatagramOffset}) ->
+    <<FragType:5, DatagramSize:11, DatagramTag:16, DatagramOffset:8>>.
+
+% Datagram Packet
+build_datagram_pckt(DtgmHeader, Payload) ->
+    Header = build_frag_header(DtgmHeader),
+    <<Header/bitstring, Payload/bitstring>>.
+
+%-------------------------------------------------------------------------------
+% @doc fragment an Ipv6 packet 
+% @returns a list of fragmented packets 
+% [{Header1, Fragment1}, ..., {HeaderN, FragmentN}]
+% @end
+%-------------------------------------------------------------------------------
+fragment_ipv6_packet(Ipv6Pckt) when is_binary(Ipv6Pckt) ->
+    DatagramTag = rand:uniform(65536), % TODO Check unicity 
+    Size = bit_size(Ipv6Pckt),
+    process_for_frag(Ipv6Pckt,Size, DatagramTag, 0, []).
+
+%-------------------------------------------------------------------------------
+% @private
+% @doc helper function to process the received packet
+% @returns a list of fragmented packets 
+% [{Header1, Fragment1}, ..., {HeaderN, FragmentN}]
+% Input : 
+%   Ipv6Pckt := binary
+%   Pckt size := integer
+%   DatagramTag := integer
+%   Offset := integer
+%   Accumulator : list  
+% @end
+%-------------------------------------------------------------------------------
+process_for_frag(<<>>,_, _, _, Acc) ->
+    lists:reverse(Acc);
+
+process_for_frag(Ipv6Pckt, Size, DatagramTag, Offset, Acc) ->
+    MaxSize = ?MAX_FRAME_SIZE - ?FRAG_HEADER_SIZE,
+    FragmentSize = min(byte_size(Ipv6Pckt), MaxSize),
+    <<Fragment:FragmentSize/binary, Rest/binary>> = Ipv6Pckt,
+    Header = build_frag_header(#frag_header{
+        frag_type = if Offset == 0 -> ?FRAG1_DHTYPE; true -> ?FRAGN_DHTYPE end,
+        datagram_size = Size,% + Offset,
+        datagram_tag = DatagramTag,
+        datagram_offset = Offset
+    }),
+    process_for_frag(Rest, Size, DatagramTag, Offset + 1, [{Header, Fragment} | Acc]).
+
+
 %------------------------------------------------------------------------------------------------------------------------------------------------------
 %
 %                                                           Header Decompression
@@ -542,20 +607,6 @@ decompress_ipv6_header(CompressedPacket, EUI64) ->
     DecompressedPckt = tuple_to_bin(DecompressedFields),
     DecompressedPckt.
     %{TrafficClass, FlowLabel, NextHeader, HopLimit, SourceAddress, DestAddress, Payload}.
-
-tuple_to_bin(Tuple) ->
-    Elements = tuple_to_list(Tuple),
-    Binaries = [element_to_binary(Elem) || Elem <- Elements],
-    list_to_binary(Binaries).
-
-element_to_binary(Elem) when is_integer(Elem) ->
-   encode_integer(Elem);
-element_to_binary(Elem) when is_binary(Elem) ->
-    Elem;
-element_to_binary(Elem) when is_tuple(Elem) ->
-    tuple_to_bin(Elem);
-element_to_binary(Elem) when is_list(Elem) ->
-    list_to_binary(Elem).
 
 decode_tf(TF, CarriedInline) ->
     % retrieve values of interest from Rest 
@@ -724,6 +775,9 @@ decode_dam(1, DAC, DAM, CarriedInline, MacIID) when DAC == 1->
     end.
 
 
+%------------------------------------------------------------------------------------------------------------------------------------------------------
+%                                                           Packet Decompression Helper
+%------------------------------------------------------------------------------------------------------------------------------------------------------
 get_iid_from_mac(MacAdd) ->
     %io:format("Received mac add: ~p~n", [MacAdd]),
     <<A1:8, A2:8, A3:8, A4:8, A5:8, A6:8>> = MacAdd,
@@ -739,58 +793,28 @@ get_default_LL_add(MacAdd)->
     LLAdd = <<16#FE80:16, 0:48,MacAdd/binary>>,
     %io:format("LLAdd: ~p~n", [LLAdd]),
     LLAdd.
+
+tuple_to_bin(Tuple) ->
+    Elements = tuple_to_list(Tuple),
+    Binaries = [element_to_binary(Elem) || Elem <- Elements],
+    list_to_binary(Binaries).
+
+element_to_binary(Elem) when is_integer(Elem) ->
+   encode_integer(Elem);
+element_to_binary(Elem) when is_binary(Elem) ->
+    Elem;
+element_to_binary(Elem) when is_tuple(Elem) ->
+    tuple_to_bin(Elem);
+element_to_binary(Elem) when is_list(Elem) ->
+    list_to_binary(Elem).
+
+
 %------------------------------------------------------------------------------------------------------------------------------------------------------
 %
-%                                                       Packet fragmentation
+%                                                         FROM Mac layer to 6LoWPAN
 %
 %------------------------------------------------------------------------------------------------------------------------------------------------------
 
-
-% Fragmentation Header
-build_frag_header(#frag_header{frag_type = FragType, datagram_size = DatagramSize, datagram_tag = DatagramTag, datagram_offset = DatagramOffset}) ->
-    <<FragType:5, DatagramSize:11, DatagramTag:16, DatagramOffset:8>>.
-
-% Datagram Packet
-build_datagram_pckt(DtgmHeader, Payload) ->
-    Header = build_frag_header(DtgmHeader),
-    <<Header/bitstring, Payload/bitstring>>.
-
-%-------------------------------------------------------------------------------
-% @doc fragment an Ipv6 packet 
-% @returns a list of fragmented packets 
-% [{Header1, Fragment1}, ..., {HeaderN, FragmentN}]
-% @end
-%-------------------------------------------------------------------------------
-fragment_ipv6_packet(Ipv6Pckt) when is_binary(Ipv6Pckt) ->
-    DatagramTag = rand:uniform(65536),
-    Size = bit_size(Ipv6Pckt),
-    process_for_frag(Ipv6Pckt,Size, DatagramTag, 0, []).
-
-%-------------------------------------------------------------------------------
-% @private
-% @doc helper function to process the received packet
-% @returns a list of fragmented packets 
-% [{Header1, Fragment1}, ..., {HeaderN, FragmentN}]
-% @end
-%-------------------------------------------------------------------------------
-process_for_frag(<<>>,_, _, _, Acc) ->
-    lists:reverse(Acc);
-
-process_for_frag(Ipv6Pckt, Size, DatagramTag, Offset, Acc) ->
-    MaxSize = ?MAX_FRAME_SIZE - ?FRAG_HEADER_SIZE,
-    FragmentSize = min(byte_size(Ipv6Pckt), MaxSize),
-    <<Fragment:FragmentSize/binary, Rest/binary>> = Ipv6Pckt,
-    Header = build_frag_header(#frag_header{
-        frag_type = if Offset == 0 -> ?FRAG1_DHTYPE; true -> ?FRAGN_DHTYPE end,
-        datagram_size = Size,% + Offset,
-        datagram_tag = DatagramTag,
-        datagram_offset = Offset
-    }),
-    process_for_frag(Rest, Size, DatagramTag, Offset + 1, [{Header, Fragment} | Acc]).
-
-
-
-%-------------------------------------------------------------------Pckt forwarding--------------------------------------------------------------------
 build_mesh_header(MeshHeader)->
     #mesh_header{
         mesh_type = MeshType, v_bit = VBit, f_bit = FBit, hops_left = HopsLeft,
@@ -800,32 +824,15 @@ build_mesh_header(MeshHeader)->
     <<MeshType:2, VBit:1, FBit:1, HopsLeft:4, OriginatorAddress:16,FinalDestinationAddress:16>>.
 
 
-build_ipv6_LL_header(Ipv6_LL_header)->
-    #ipv6_LL_header{
-        prefix = Prefix, padd = Padd, identifier = Identifier
-    } = Ipv6_LL_header, 
-
-    <<Prefix:5,Padd:54,Identifier:64>>.
-
-
-convert_hc1_tuple_to_bin(IphcHeaderTuple)->
-    {Tf, Nh, Hlim, Cid, Sac, Sam, M, Dac, Dam} = IphcHeaderTuple,
-
-    % we add 3 padding bits to make it a multiple of 8
-    Binary = <<Tf:2, Nh:1, Hlim:2, Cid:1, Sac:1, Sam:2, M:1, Dac:1, Dam:2, 0:3>>,
-    Binary.
 
 
 
 %------------------------------------------------------------------------------------------------------------------------------------------------------
 %
-%                                                         FROM Mac layer to 6LoWPAN
+%                                                               Reassembly
 %
 %------------------------------------------------------------------------------------------------------------------------------------------------------
 
-% Here we want to forward the packet from the phy layer to the app layer
-
-%------reassamble received pckt 
 
 % upon receive fragment event: 
 % - start timer
@@ -845,14 +852,6 @@ datagram_info(Fragment)->
 start_reassembly_timer(DatagramTag, Map)->
     erlang:send_after(?REASSEMBLY_TIMEOUT, self(), {timeout, DatagramTag, Map}).
 
-loop() ->
-    receive
-        {timeout, DatagramTag, Map} ->
-            discard_datagram(DatagramTag, Map)
-            %loop()
-    %after ?REASSEMBLY_TIMEOUT ->
-        % start recovery mode
-    end.
 %-------------------------------------------------------------------------------
 % @doc launch the reassembly process
 % @param Fragments: list [{Header1, Fragment1}, ..., {HeaderN, FragmentN}]
@@ -864,12 +863,9 @@ reassemble_datagrams(Fragments) when is_list(Fragments)->
     {_, Size, Tag, _, _} = lowpan:datagram_info(FirstFragment),
 
     Datagram = #datagram{tag = Tag, size = Size},
-    DatagramMap = maps:put(Tag, Datagram, ?DATAGRAMS_MAP),
-    Timer = start_reassembly_timer(Tag, DatagramMap),
-    UpdatedDatagram = Datagram#datagram{timer = Timer},
-    UpdatedMap = maps:put(Tag, UpdatedDatagram, DatagramMap),
+    DatagramMap = maps:put(Tag, Datagram, ?DATAGRAMS_MAP), % add retrieve info to the datagram map 
 
-    {ReassembledPacket, _NewMap} = process_fragments(Fragments, UpdatedMap, undefined),
+    {ReassembledPacket, _NewMap} = process_fragments(Fragments, DatagramMap, undefined),
     ReassembledPacket.
 
 
@@ -891,9 +887,7 @@ reassemble_datagram(Fragment, DatagramMap) ->
         error ->
             % first fragment
             Datagram = #datagram{tag = Tag, size = Size},
-            Timer = start_reassembly_timer(Tag, DatagramMap),
-            UpdatedDatagram = Datagram#datagram{timer = Timer},
-            UpdatedMap = maps:put(Tag, UpdatedDatagram, DatagramMap),
+            UpdatedMap = maps:put(Tag, Datagram, DatagramMap),
             process_fragment(Fragment, UpdatedMap)
     end.
 
@@ -941,11 +935,11 @@ process_fragment(<<?FRAGN_DHTYPE:5, Size:11, Tag:16, Offset:8, Payload/binary>>,
     case maps:find(Tag, Map) of
         {ok, OldDatagram} ->
             CurrSize = bit_size(Payload),
-            UpdatedCmpt = OldDatagram#datagram.cmpt + CurrSize,
-            FragmentsMap = OldDatagram#datagram.fragments,
-            NewFragments = FragmentsMap#{Offset => Payload},
-            UpdatedDatagram = OldDatagram#datagram{cmpt = UpdatedCmpt, fragments = NewFragments},
-            UpdatedMap = maps:put(Tag, UpdatedDatagram, Map),
+            UpdatedCmpt = OldDatagram#datagram.cmpt + CurrSize, % update size cmpt
+            FragmentsMap = OldDatagram#datagram.fragments, % get fragmentMap
+            NewFragments = FragmentsMap#{Offset => Payload}, % put new fragment to fragmentMap
+            UpdatedDatagram = OldDatagram#datagram{cmpt = UpdatedCmpt, fragments = NewFragments}, % update datagram
+            UpdatedMap = maps:put(Tag, UpdatedDatagram, Map), % update DatagramMap
             case UpdatedCmpt == Size of
                 true ->
                     ReassembledPacket = reassemble(Tag, UpdatedMap),
@@ -957,6 +951,29 @@ process_fragment(<<?FRAGN_DHTYPE:5, Size:11, Tag:16, Offset:8, Payload/binary>>,
             {undefined, Map}
     end.
 
+%-------------------------------------------------------------------------------
+% @private
+% @doc helper function to reassembled all received fragments based on the Tag
+% @end
+%-------------------------------------------------------------------------------
+reassemble(Tag,UpdatedMap)->
+    Datagram = maps:get(Tag, UpdatedMap),
+    FragmentsMap = Datagram#datagram.fragments,
+    % sort fragments by offset and extract the binary data
+    SortedFragments = lists:sort([ {Offset, Fragment} || {Offset, Fragment} <- maps:to_list(FragmentsMap) ]),
+    % concatenate the fragments
+    ReassembledPacket = lists:foldl(fun({_Offset, Payload}, Acc)-> 
+                                        <<Acc/binary, Payload/binary>> % append new payload to the end   
+                                    end, <<>>, SortedFragments), %% <<>> is the initial value of the accumulator
+    discard_datagram(Tag,UpdatedMap), % discard tag so it can be reused
+    ReassembledPacket.
+
+
+discard_datagram(Tag, Map)->
+    maps:remove(Tag,Map).
+
+%discard_fragment(Offset, Fragments)->
+%    maps:remove(Offset,Fragments).
 
 
 %-------------------------------------------------------------------------------
@@ -970,29 +987,3 @@ process_fragment(<<?FRAGN_DHTYPE:5, Size:11, Tag:16, Offset:8, Payload/binary>>,
 %        true-> true;
 %        false-> false
 %    end.
-
-discard_datagram(Tag, Map)->
-    maps:remove(Tag,Map).
-
-%discard_fragment(Offset, Fragments)->
-%    maps:remove(Offset,Fragments).
-
-%-------------------------------------------------------------------------------
-% @private
-% @doc helper function to reassembled all received fragments based on the Tag
-% @end
-%-------------------------------------------------------------------------------
-reassemble(Tag,UpdatedMap)->
-    Datagram = maps:get(Tag, UpdatedMap),
-    FragmentsMap = Datagram#datagram.fragments,
-    % sort fragments by offset and extract the binary data
-    SortedFragments = lists:sort([ {Offset, Fragment} || {Offset, Fragment} <- maps:to_list(FragmentsMap) ]),
-    % concatenate the fragments
-    ReassembledPacket = lists:foldl(fun({_Offset, Frag}, Acc)-> 
-                                        <<Acc/binary, Frag/binary>> 
-                                    end, <<>>, SortedFragments),
-    discard_datagram(Tag,UpdatedMap),
-    ReassembledPacket.
-
-    
-% TODO - pcq decompression

@@ -40,8 +40,8 @@
     v_bit = ?V_64BIT :: v_field(),
     f_bit = ?V_64BIT :: f_field(),
     hops_left = ?HOPS_LEFT :: hl_field(),
-    originator_address = <<0:16/unit:1>>,
-    final_destination_address = <<0:16/unit:1>>
+    originator_address = <<0:16>>,
+    final_destination_address = <<0:16>>
 }).
 
 
@@ -69,14 +69,14 @@
 -define(MAX_FRAME_SIZE, 33). 
 -define(REASSEMBLY_TIMEOUT, 60000). % 60 sec
 -define(FRAG_HEADER_SIZE, 5). % 5 bytes including frag_type, datagram_size, datagram_tag, and datagram_offset
--define(DATAGRAMS_MAP, #{}).
+-define(DATAGRAMS_MAP, #{}). % map of received datagrams, the keys are the tag of datagrams
 
 %--------------------------------------------------IPv6 Link Local Address--------------------------------------------------
 
 -record(ipv6_LL_header, {
     prefix = 2#1111111010,
-    padd = <<0:54/unit:1>>, % 54 bit full of zeros 
-    identifier = <<0:64/unit:1>> %64 bits for interface identifier
+    padd = <<0:54>>, % 54 bit full of zeros 
+    identifier = <<0:64>> %64 bits for interface identifier
 }).
 
 
@@ -96,7 +96,7 @@
 
 -record(lowpan_hc1_header, {
     hc_type = ?HC1_DHTYPE,
-    hc1_encoding = <<0:8/unit:1>>, % 8-bit field for HC1 encoding
+    hc1_encoding = <<0:8>>, % 8-bit field for HC1 encoding
     pi :: 0..1, % Prefix carried in-line
     pc :: 0..1, % Prefix compressed
     ii :: 0..1, % Interface identifier carried in-line

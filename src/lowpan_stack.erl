@@ -59,9 +59,8 @@ rcv_frame()->
 init(Params) ->
     init_ets_callback_table(node()), % initialize callback table on mock_phy_net
     SrcMacAdd = maps:get(src_mac_addr, Params), 
-    DstMacAdd = maps:get(dest_mac_addr,Params),
-    Data = #{src_mac_addr => SrcMacAdd, dest_mac_addr => DstMacAdd},
-    DatagramMap = maps:new(),
+    Data = #{src_mac_addr => SrcMacAdd},%, dest_mac_addr => DstMacAdd},
+    %DatagramMap = maps:new(),
     %Data = #{
     %    Params => Params,
     %    datagram_map => DatagramMap
@@ -94,12 +93,11 @@ idle_state({call, From}, {frame_rx}, Data) ->
 
 % --- Internal state -----------
 % Handling packet transmission state
-pckt_tx_state(_EventType, {pckt_tx, IdleState, Ipv6Pckt, From}, Data = #{src_mac_addr := SrcMacAddress, dest_mac_addr := DstMacAddress}) ->
-    %io:format("DstMacAddress ~p~n", [DstMacAddress]),
+pckt_tx_state(_EventType, {pckt_tx, IdleState, Ipv6Pckt, From}, Data = #{src_mac_addr := SrcMacAddress}) ->
+
     {CompressedHeader, _} = lowpan:compress_ipv6_header(Ipv6Pckt),
     {_, _, _, _, _,_, _, DestAddress, Payload} = lowpan:get_ipv6_pckt_info(Ipv6Pckt),
     DestMacAddress = lowpan:get_mac_add(DestAddress),
-    io:format("DestMacAddress: ~p~n",[DestMacAddress]),
    
     CompressedPacket = <<CompressedHeader/binary, Payload/binary>>,
     Fragments = lowpan:fragment_ipv6_packet(CompressedPacket),
@@ -107,10 +105,10 @@ pckt_tx_state(_EventType, {pckt_tx, IdleState, Ipv6Pckt, From}, Data = #{src_mac
     
 
     Response = lists:foreach(fun({Header, Datas})->
-        io:format("Fragment: ~p~n",[<<Header/binary,Datas/binary>>]),
+        Pckt = <<Header/binary,Datas/binary>>,
+        io:format("Fragment: ~p~n",[Pckt]),
                         ieee802154:transmission({#frame_control{src_addr_mode = ?EXTENDED, dest_addr_mode = ?EXTENDED}, 
-                                                #mac_header{src_addr = SrcMacAddress, dest_addr = DestMacAddress},
-                                                <<Header/binary,Datas/binary>>})
+                                                #mac_header{src_addr = SrcMacAddress, dest_addr = DestMacAddress},Pckt})
                         end, Fragments),
     {next_state, IdleState, Data#{fragments => Fragments}, [{reply, From, Response}]}.
        
@@ -122,13 +120,13 @@ frame_rx_state(_EventType, {frame_rx, _, From}, State) ->
         ok ->
             io:format("Rx_on activated on node: ~p~n",[node()]),
             StartTime = erlang:monotonic_time(millisecond),
-            get_new_frame(From, State, 0, StartTime);
+            check_for_reassembly(From, State, 0, StartTime);
         {error, E} ->
             {next_state, idle_state, State, [{reply, From, {error, E}}]}
     end.
 
-get_new_frame(From, State, PrevNbRxFrames, StartTime) ->
-    [{_, NbRxFrames}] = ets:lookup(callback_table, nb_rx_frames), % get current NbRxFrames
+check_for_reassembly(From, State, PrevNbRxFrames, StartTime) ->
+    [{_, NbRxFrames}] = ets:lookup(callback_table, frames_counter), % get current NbRxFrames
     CurrentTime = erlang:monotonic_time(millisecond),
     MaxTime = 5000,
 
@@ -138,29 +136,25 @@ get_new_frame(From, State, PrevNbRxFrames, StartTime) ->
 
         PrevNbRxFrames -> % nothing new, wait 100ms and check again
             timer:sleep(100), 
-            get_new_frame(From, State, PrevNbRxFrames, StartTime);
+            check_for_reassembly(From, State, PrevNbRxFrames, StartTime);
 
         _ -> % new frame received
-            Fragments = get_stored_payloads(NbRxFrames),
+            Fragments = get_stored_payloads(),
             Reassembled = lowpan:reassemble_datagrams(Fragments),
             case Reassembled of 
                 notYetReassembled-> 
                     timer:sleep(100), 
-                    get_new_frame(From, State, NbRxFrames, StartTime);
+                    check_for_reassembly(From, State, NbRxFrames, StartTime);
                 _-> io:format("Reassembly done~n"),
-
                     EUI = erpc:call(node(), ieee802154, get_mac_extended_address, []),
                     %lowpan:decompress_ipv6_header(Reassembled, EUI),
                     {next_state, idle_state, State, [{reply, From, Reassembled}]}
             end
     end.
 
-get_stored_payloads(NbRxFrames) ->
-    %io:format("Total frame received: ~p~n", [NbRxFrames]),
-    
-    Payloads = ets:lookup(callback_table, rx_frames),
-    
-    PayloadsList = [Payload || {rx_frames, Payload} <- Payloads],
+get_stored_payloads() ->
+    Payloads = ets:lookup(callback_table, frame_list),
+    PayloadsList = [Payload || {frame_list, Payload} <- Payloads], % add all payload from frame_list to PayloadsList
     L = lists:flatten(PayloadsList),
     L.
 
@@ -179,16 +173,15 @@ code_change(_, _, _, _) ->
 
 input_callback(Frame, _, _, _) ->
     {_, _, Payload} = Frame, 
-    ets:update_counter(callback_table, nb_rx_frames, 1),
-    case ets:lookup(callback_table, rx_frames) of
-        [] -> ets:insert(callback_table, {rx_frames, [Payload]});
-        [{_, Frames}] -> 
-            % Ajoutez le nouveau payload à la fin de la liste
-            UpdatedFrames = Frames ++ [Payload],
-            ets:insert(callback_table, {rx_frames, UpdatedFrames})
-    end.
+    case ets:lookup(callback_table, frame_list) of
+        [] -> ets:insert(callback_table, {frame_list, Payload}); % insertion to empty list
+        [{_, Frames}] -> % list non empty
+            UpdatedFrames = Frames ++ [Payload], % add payload to the end of the list
+            ets:insert(callback_table, {frame_list, UpdatedFrames})
+    end, 
+    ets:update_counter(callback_table, frames_counter, 1).
 
 
 init_ets_callback_table(Node) ->
-    erpc:call(Node, ets, insert, [callback_table, {nb_rx_frames, 0}]),
-    erpc:call(Node, ets, insert, [callback_table, {rx_frames, []}]).
+    erpc:call(Node, ets, insert, [callback_table, {frames_counter, 0}]), % initialize frame list counter
+    erpc:call(Node, ets, insert, [callback_table, {frame_list, []}]). % initialize empty list called frame_list

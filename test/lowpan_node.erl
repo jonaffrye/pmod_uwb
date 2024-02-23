@@ -74,7 +74,7 @@ boot_lowpan_node(Name, Network, SrcMacAddress, DstMacAddress, Callback) ->
     %lowpan:get_iid_from_mac(SrcMacAddress)
     {Pid, Node} = boot_node(Name),
     init_network_layers(Node, Network, mac_extended_address, SrcMacAddress, DstMacAddress, Callback),
-    erpc:call(Node, lowpan_stack, start, [#{src_mac_addr => SrcMacAddress, dest_mac_addr => DstMacAddress}]),
+    erpc:call(Node, lowpan_stack, start, [#{src_mac_addr => SrcMacAddress}]),
     {Pid, Node}.
 
 %% Helper Function

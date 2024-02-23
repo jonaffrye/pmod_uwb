@@ -41,6 +41,14 @@ init_per_group(_, Config) ->
 
     Payload = <<"Hello world! This is an Ipv6 pckt">>,
     PayloadLength = byte_size(Payload),
+
+    %IPv6Header1 = #ipv6_header{version =  6, traffic_class = 224, flow_label = 2, payload_length = PayloadLength,
+    %    next_header = 58, hop_limit = 255, source_address = 2, destination_address = 3},
+    %Ipv6Pckt1 = ipv6:build_ipv6_packet(IPv6Header1, Payload),
+
+    %IPv6Header2 = #ipv6_header{version =  6, traffic_class = 224, flow_label = 1048575, payload_length = PayloadLength,
+    %next_header = 58, hop_limit = 64, source_address = Node1Address, destination_address = Node3Address},
+    %Ipv6Pckt2 = ipv6:build_ipv6_packet(IPv6Header2, Payload),
     
 
     Ipv6Pckt = <<6:4, 224:8, 2:20, PayloadLength:16, 58:8, 255:8, Node1Address/binary, Node2Address/binary, Payload/binary>>,
