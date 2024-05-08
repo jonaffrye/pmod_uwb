@@ -43,7 +43,14 @@ fragmentation_test()->
 
 datagram_info_test()->
     Fragment = <<0:5, 1000:11, 12345:16, 5:8, "payload">>,
-    {FragType, DatagramSize, DatagramTag, DatagramOffset, Payload} = lowpan:datagram_info(Fragment),
+
+    DtgInfo = lowpan:datagram_info(Fragment),
+    FragType = DtgInfo#datagramInfo.fragtype, 
+    DatagramSize = DtgInfo#datagramInfo.datagramSize, 
+    DatagramTag = DtgInfo#datagramInfo.datagramTag, 
+    DatagramOffset = DtgInfo#datagramInfo.datagramOffset, 
+    Payload = DtgInfo#datagramInfo.payload, 
+    
     ?assertEqual(0, FragType),
     ?assertEqual(1000, DatagramSize),
     ?assertEqual(12345, DatagramTag),
@@ -52,7 +59,7 @@ datagram_info_test()->
 
 reassemble_fragments_list_test()->
     Data = <<"Hello World!">>, 
-    PayloadLen = bit_size(Data),
+    PayloadLen = byte_size(Data),
 
     FragHeader1 = #frag_header{
         frag_type = 24, datagram_size = PayloadLen, datagram_tag = 25, datagram_offset = 0
@@ -69,7 +76,7 @@ reassemble_fragments_list_test()->
 
 reassemble_single_fragments_test()->
     Data = <<"Hello World!">>, 
-    PayloadLen = bit_size(Data),
+    PayloadLen = byte_size(Data),
 
     FragHeader1 = #frag_header{
         frag_type = 24, datagram_size = PayloadLen, datagram_tag = 25, datagram_offset = 0
@@ -102,40 +109,13 @@ reassemble_full_ipv6_pckt_test()->
         destination_address = 4
     },
     Ipv6Pckt = ipv6:build_ipv6_packet(IPv6Header,Payload), 
-
+    
     FragmentList = lowpan:fragment_ipv6_packet(Ipv6Pckt),
     Fragments = lists:map(fun({FragHeader, FragPayload})->
                                 <<FragHeader/binary,FragPayload/binary>> 
                           end, FragmentList),
     Reassembled = lowpan:reassemble_datagrams(Fragments),
     ?assertEqual(Ipv6Pckt, Reassembled).
-
-%reassemble_datagram_with_timer_test_() ->
-%    {timeout, 60, fun reassemble_datagram_with_timer_test/0}.
-%reassemble_datagram_with_timer_test()->
-%    Data = <<"Hello World!">>, 
-%    PayloadLen = bit_size(Data),
-
-%    FragHeader1 = #frag_header{
-%        frag_type = 24, datagram_size = PayloadLen, datagram_tag = 25, datagram_offset = 0
-%    },
-%    FragHeader2 = #frag_header{
-%        frag_type = 28, datagram_size = PayloadLen, datagram_tag = 25, datagram_offset = 1
-%    },
-
-%    Frag1 = lowpan:build_datagram_pckt(FragHeader1, <<"Hello ">>),
-%    Frag2 = lowpan:build_datagram_pckt(FragHeader2, <<"World!">>),
-
-%    InitialMap = maps:new(),
-
-%    {notYetReassembled, IntermediateMap} = lowpan:reassemble_datagram(Frag1, InitialMap),
-    
-%    timer:sleep(5000),
-
-%    {Reassembled, _FinalMap} = lowpan:reassemble_datagram(Frag2, IntermediateMap),
-
-%    ?assertEqual(<<"Hello World!">>, Reassembled).
-
 
 compress_header_ex1_test()->
     Payload = <<"Hello world this is an ipv6 packet">>,
@@ -152,12 +132,13 @@ compress_header_ex1_test()->
     Dam = 2#11,
     Expected = {Tf, Nh, Hlim, Cid, Sac, Sam, M, Dac, Dam},
     ExpectedCarriedInline = {224,58,1},
-    
+    io:format("Expected ~p~n", [Expected]),   
     SrcAddress = <<16#FE80:16, 0:48,16#020164FFFE2FFC0A:64>>,
     DstAddress = <<16#FF02:16,16#00000000000:48, 16#0000000000000001:64>>, 
     Ipv6Pckt = <<6:4, 224:8, 0:20, PayloadLength:16, 58:8, 255:8, SrcAddress/binary, DstAddress/binary, Payload/binary>>,
     
     {CompressedHeader,_,CarriedInlineData} = lowpan:compress_ipv6_header(Ipv6Pckt), 
+    io:format("Expected ~p~nReceived ~p~n", [Expected, CompressedHeader]),
     ?assertEqual(Expected, CompressedHeader), 
             
     CarriedInlineDataOut = {maps:get("TrafficClass",CarriedInlineData),

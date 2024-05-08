@@ -4,7 +4,7 @@
 %-include("../src/lowpan.hrl").
 -include("../src/ieee802154.hrl"). 
 
--export([boot_network_node/0, stop_network_node/2, boot_lowpan_node/4, boot_lowpan_node/5, stop_lowpan_node/2,
+-export([boot_network_node/1, stop_network_node/2, boot_lowpan_node/3, boot_lowpan_node/4, stop_lowpan_node/2,
             boot_node/1, get_project_cwd/0]).
 
 -define(ROBOT_LIB_DIR, "/_build/default/lib").
@@ -33,15 +33,28 @@ boot_node(Name) ->
     {Pid, NodeName}.
 
 
+%% @equiv boot_network_node(#{}).
+-spec boot_network_node() -> node().
+boot_network_node() ->
+    boot_network_node(#{}).
+
 %% @doc Boot the network simulation node
 %% This node is necessary to simulate the real UWB physical network
 %% At startup, the mock_phy_network register themselves to the network to receive the tx frames
-%-spec boot_network_node() -> node().
-boot_network_node() ->
-    {Pid, NetworkNodeName} = boot_node(network),
-    erpc:call(NetworkNodeName, network_simulation, start, [{}, {}]),
-    ping_node(network_loop, NetworkNodeName),
-    {Pid, NetworkNodeName}.
+boot_network_node(Args) ->
+    {Pid, Network} = boot_node(network),
+    erpc:call(Network, network_simulation, start, [{}, Args]),
+    ping_node(network_loop, Network),
+    {Pid, Network}.
+
+%% @doc Stops the network node
+%% This function stops the network process and then stops the node
+-spec stop_network_node(Network, NetPid) -> ok when
+      Network :: node(),
+      NetPid  :: pid().
+stop_network_node(Network, NetPid) ->
+    erpc:call(Network, network_simulation, stop, [{}]),
+    peer:stop(NetPid).
 
 
 %% @private
@@ -56,34 +69,25 @@ ping_node(RegisteredName, Node) ->
     unregister(pingProcess).
 
 
-%% @doc Stops the network node
-%% This function stops the network process and then stops the node
-%-spec stop_network_node(Network, NetPid) -> ok when Network :: node(), NetPid  :: pid().
-stop_network_node(Network, NetPid) ->
-    erpc:call(Network, network_simulation, stop, [{}]),
-    peer:stop(NetPid).
-
-
 %% @doc Boots a node, initialize a 6lowpan stack inside
 %-spec boot_lowpan_node(Name, Network, MacAddressType, MacAddress, Callback) -> {pid(), node()}.
-boot_lowpan_node(Name, Network, SrcMacAddress, DstMacAddress) ->
-    boot_lowpan_node(Name, Network, SrcMacAddress, DstMacAddress, fun()->ok end).
+boot_lowpan_node(Name, Network, SrcMacAddress) ->
+    boot_lowpan_node(Name, Network, SrcMacAddress, fun()->ok end).
 
-boot_lowpan_node(Name, Network, SrcMacAddress, DstMacAddress, Callback) ->
+boot_lowpan_node(Name, Network, SrcMacAddress, Callback) ->
     %% TODO assign default IPv6 address from mac address 
     %lowpan:get_iid_from_mac(SrcMacAddress)
     {Pid, Node} = boot_node(Name),
-    init_network_layers(Node, Network, mac_extended_address, SrcMacAddress, DstMacAddress, Callback),
+    init_network_layers(Node, Network, mac_extended_address, SrcMacAddress, Callback),
     erpc:call(Node, lowpan_stack, start, [#{src_mac_addr => SrcMacAddress}]),
     {Pid, Node}.
 
 %% Helper Function
 %% @doc Initialize network layers for a node
 %-spec init_network_layers(Node, Network, MacAddressType, MacAddress, Callback) -> ok.
-init_network_layers(Node, Network, MacAddressType, SrcMacAddress, DstMacAddress, Callback) ->
-    erpc:call(Node, mock_phy_network, start, [spi2, #{network => Network,  src_mac_addr=> SrcMacAddress,
-                 dest_mac_addr => DstMacAddress}]), % start phy_net mockup
-    erpc:call(Node, ieee802154, start, [#ieee_parameters{phy_layer = mock_phy_network, duty_cycle = duty_cycle_non_beacon, input_callback = Callback }]),
+init_network_layers(Node, Network, MacAddressType, SrcMacAddress, Callback) ->
+    erpc:call(Node, mock_phy_network, start, [spi2, #{network => Network}]), % start phy_net mockup
+    erpc:call(Node, ieee802154, start, [#ieee_parameters{phy_layer = mock_phy_network, duty_cycle = duty_cycle_non_beacon, input_callback = Callback}]),
     set_mac_address(Node, MacAddressType, SrcMacAddress).
 
 %% @doc Sets the MAC address based on type

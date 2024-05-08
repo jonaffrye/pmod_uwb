@@ -26,7 +26,7 @@ build_ipv6_header(IPv6Header)->
         destination_address = DestAdd
     } = IPv6Header,
 
-    <<Version:4,Traffic_class:8,Flow_label:20,Payload_length:16,Next_header:8,Hop_limit:8,SourceAdd:128,DestAdd:128>>.
+    <<Version:4,Traffic_class:8,Flow_label:20,Payload_length:16,Next_header:8,Hop_limit:8,SourceAdd/binary,DestAdd/binary>>.
 
 build_ipv6_packet(IPv6Header, Payload)->
     Header = build_ipv6_header(IPv6Header),
