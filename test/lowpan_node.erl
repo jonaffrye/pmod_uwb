@@ -99,8 +99,6 @@ init_network_layers(Node, Network, MacAddressType, NodeMacAddress, Callback) ->
     erpc:call(Node, ieee802154, start, [#ieee_parameters{phy_layer = mock_phy_network, duty_cycle = duty_cycle_non_beacon, input_callback = Callback}]),
     erpc:call(Node, mock_top_layer, start, []),
     erpc:call(Node, ieee802154, set_pib_attribute, [MacAddressType, NodeMacAddress]).
-    %set_mac_address(Node, MacAddressType, NodeMacAddress).
-
 
 
 %% @doc Stops a 6LoWPAN node.
